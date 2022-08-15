@@ -372,6 +372,8 @@ public:
 				auto group_node = fbxsdk::FbxNode::Create(_fbx_manager, group_name.data());
 				root_node->AddChild(group_node);
 
+				
+
 				if (file_header->GetVersion() < 0x10002)
 				{
 					// Parse method for 10001 or lower
@@ -384,6 +386,47 @@ public:
 				}
 				else
 				{
+					auto mesh_node = group_node;
+					auto mesh_attribute = fbxsdk::FbxMesh::Create(_fbx_manager, "");
+					auto skin_deformer = fbxsdk::FbxSkin::Create(_fbx_manager, "");
+					mesh_attribute->AddDeformer(skin_deformer);
+					mesh_node->SetNodeAttribute(mesh_attribute);
+
+					auto geometry_element_normal = mesh_attribute->CreateElementNormal();
+					geometry_element_normal->SetMappingMode(FbxGeometryElement::eByControlPoint);
+					geometry_element_normal->SetReferenceMode(FbxGeometryElement::eDirect);
+					auto geometry_element_uv_1 = mesh_attribute->CreateElementUV("uv1");
+					geometry_element_uv_1->SetMappingMode(FbxGeometryElement::eByControlPoint);
+					geometry_element_uv_1->SetReferenceMode(FbxGeometryElement::eDirect);
+					auto geometry_element_uv_2 = mesh_attribute->CreateElementUV("uv2");
+					geometry_element_uv_2->SetMappingMode(FbxGeometryElement::eByControlPoint);
+					geometry_element_uv_2->SetReferenceMode(FbxGeometryElement::eDirect);
+
+					// weird hack to get rid of double vertex color layer
+					auto redudant_element = mesh_attribute->CreateElementVertexColor();
+					if (mesh_attribute->GetElementVertexColorCount() > 1)
+					{
+						mesh_attribute->RemoveElementVertexColor(redudant_element);
+					}
+
+					auto geometry_element_color = mesh_attribute->GetElementVertexColor();
+					geometry_element_color->SetMappingMode(FbxGeometryElement::eByControlPoint);
+					geometry_element_color->SetReferenceMode(FbxGeometryElement::eDirect);
+
+					size_t control_point_count = 0;
+					for (int group_data_idx = 0; group_data_idx < mesh_group_header->group_data_count; group_data_idx++)
+					{
+						auto mesh_group_data_header = mesh_group_header->GetMeshGroupDataHeader(group_data_idx);
+						for (int mesh_idx = 0; mesh_idx < mesh_group_data_header->mesh_count; mesh_idx++)
+						{
+							auto mesh_header = mesh_group_data_header->GetMeshHeader(mesh_idx);
+							control_point_count += mesh_header->GetVertexDataIndices().size();
+						}
+					}
+
+					mesh_attribute->InitControlPoints(control_point_count);
+					size_t control_points_offset = 0;
+
 					for (int group_data_idx = 0; group_data_idx < mesh_group_header->group_data_count; group_data_idx++)
 					{
 						auto mesh_group_data_header = mesh_group_header->GetMeshGroupDataHeader(group_data_idx);
@@ -398,12 +441,12 @@ public:
 
 						assert(!(mesh_group_data_header->weights_count % mesh_group_data_header->position_count));
 
-						for (auto pos : mesh_group_data_header->GetPositions())
+						/*for (auto pos : mesh_group_data_header->GetPositions())
 						{
 							std::cout << std::format(
 								"Position x {} y {} z {}\n", pos.x, pos.y, pos.z
 							);
-						}
+						}*/
 
 						/*for (auto normal : mesh_group_data_header->GetNormals())
 						{
@@ -458,47 +501,10 @@ public:
 							auto faces = mesh_header->GetFaces();
 							auto weight_bone_indices = mesh_header->GetWeightBoneIndices();
 
-							auto mesh_node = fbxsdk::FbxNode::Create(_fbx_manager, std::format("{}__{}_{}", group_name, group_data_idx, mesh_idx).c_str());
-							group_node->AddChild(mesh_node);
-							auto mesh_attribute = fbxsdk::FbxMesh::Create(_fbx_manager, "");
-							auto skin_deformer = FbxSkin::Create(_fbx_manager, "");
-							mesh_attribute->AddDeformer(skin_deformer);
-							mesh_node->SetNodeAttribute(mesh_attribute);
-
-							auto geometry_element_normal = mesh_attribute->CreateElementNormal();
-							geometry_element_normal->SetMappingMode(FbxGeometryElement::eByControlPoint);
-							geometry_element_normal->SetReferenceMode(FbxGeometryElement::eDirect);
-							auto geometry_element_uv_1 = mesh_attribute->CreateElementUV("uv1");
-							geometry_element_uv_1->SetMappingMode(FbxGeometryElement::eByControlPoint);
-							geometry_element_uv_1->SetReferenceMode(FbxGeometryElement::eDirect);
-							fbxsdk::FbxGeometryElementUV* geometry_element_uv_2 = nullptr;
-							if (mesh_group_data_header->uv_2_count)
-							{
-								geometry_element_uv_2 = mesh_attribute->CreateElementUV("uv2");
-								geometry_element_uv_2->SetMappingMode(FbxGeometryElement::eByControlPoint);
-								geometry_element_uv_2->SetReferenceMode(FbxGeometryElement::eDirect);
-							}
-
-							// weird hack to get rid of double vertex color layer
-							auto redudant_element = mesh_attribute->CreateElementVertexColor();
-							if (mesh_attribute->GetElementVertexColorCount() > 1)
-							{
-								mesh_attribute->RemoveElementVertexColor(redudant_element);
-							}
-
-							fbxsdk::FbxGeometryElementVertexColor* geometry_element_color = nullptr;
-							if (mesh_group_data_header->color_count)
-							{
-								geometry_element_color = mesh_attribute->GetElementVertexColor();
-								geometry_element_color->SetMappingMode(FbxGeometryElement::eByControlPoint);
-								geometry_element_color->SetReferenceMode(FbxGeometryElement::eDirect);
-							}
-
-							mesh_attribute->InitControlPoints(vertices_data.size());
-
+							std::vector<std::string_view> weighted_bone_names;
 							if (mesh_header->weight_bone_count)
 							{
-								auto weighted_bone_names = mesh_header->GetWeightedBoneNames()->Parse();
+								weighted_bone_names = mesh_header->GetWeightedBoneNames()->Parse();
 								assert(mesh_header->weight_bone_count == weighted_bone_names.size());
 
 								for (auto& weight_bone_name : weighted_bone_names)
@@ -507,11 +513,25 @@ public:
 
 									if (bone_node)
 									{
-										auto cluster = fbxsdk::FbxCluster::Create(_fbx_manager, bone_node->GetName());
-										cluster->SetLink(bone_node);
-										cluster->SetLinkMode(fbxsdk::FbxCluster::eTotalOne);
-										cluster->SetTransformLinkMatrix(bone_node->EvaluateGlobalTransform());
-										skin_deformer->AddCluster(cluster);
+										bool cluster_exists = false;
+										for (int cluster_i = 0; cluster_i < skin_deformer->GetClusterCount(); cluster_i++)
+										{
+											auto cluster = skin_deformer->GetCluster(cluster_i);
+											if (weight_bone_name == cluster->GetName())
+											{
+												cluster_exists = true;
+												break;
+											}
+										}
+
+										if (!cluster_exists)
+										{
+											auto cluster = fbxsdk::FbxCluster::Create(_fbx_manager, bone_node->GetName());
+											cluster->SetLink(bone_node);
+											cluster->SetLinkMode(fbxsdk::FbxCluster::eTotalOne);
+											cluster->SetTransformLinkMatrix(bone_node->EvaluateGlobalTransform());
+											skin_deformer->AddCluster(cluster);
+										}
 									}
 									else
 									{
@@ -532,17 +552,17 @@ public:
 								auto normal = mesh_group_data_header->GetNormals()[vertex_indices.normal_index];
 								auto uv = mesh_group_data_header->GetUVs()[vertex_indices.uv_index];
 
-								mesh_attribute->GetControlPoints()[i] = fbxsdk::FbxVector4(position.x, position.y, position.z);
+								mesh_attribute->GetControlPoints()[control_points_offset + i] = fbxsdk::FbxVector4(position.x, position.y, position.z);
 								geometry_element_normal->GetDirectArray().Add(fbxsdk::FbxVector4(normal.x, normal.y, normal.z));
 								geometry_element_uv_1->GetDirectArray().Add(fbxsdk::FbxVector2(uv.x, 1.0 - uv.y));
 
-								if (geometry_element_uv_2)
+								if (mesh_group_data_header->uv_2_count)
 								{
 									auto uv2 = mesh_group_data_header->GetUVs2()[vertex_indices.uv_2_index];
 									geometry_element_uv_2->GetDirectArray().Add(fbxsdk::FbxVector2(uv2.x, 1.0 - uv2.y));
 								}
 
-								if (geometry_element_color)
+								if (mesh_group_data_header->color_count)
 								{
 									auto color = mesh_group_data_header->GetColors()[vertex_indices.color_index];
 									geometry_element_color->GetDirectArray().Add(color.ToFbxColor());
@@ -555,8 +575,18 @@ public:
 
 									for (int j = 2; j >= 0; j--)
 									{
-										auto cluster = skin_deformer->GetCluster(bone_indices.indices[j]);
-										cluster->AddControlPointIndex(i, bone_weights.GetWeights().raw[j]);
+										fbxsdk::FbxCluster* cluster = nullptr;
+										for (int cluster_i = 0; cluster_i < skin_deformer->GetClusterCount(); cluster_i++)
+										{
+											auto c = skin_deformer->GetCluster(cluster_i);
+											if (weighted_bone_names[bone_indices.indices[j]] == c->GetName())
+											{
+												cluster = c;
+												break;
+											}
+										}
+
+										cluster->AddControlPointIndex(control_points_offset + i, bone_weights.GetWeights().raw[j]);
 									}
 								}
 							}
@@ -566,11 +596,13 @@ public:
 								auto face = faces[i];
 
 								mesh_attribute->BeginPolygon(-1, -1, -1, false);
-								mesh_attribute->AddPolygon(face.indices[0]);
-								mesh_attribute->AddPolygon(face.indices[1]);
-								mesh_attribute->AddPolygon(face.indices[2]);
+								mesh_attribute->AddPolygon(control_points_offset + face.indices[0]);
+								mesh_attribute->AddPolygon(control_points_offset + face.indices[1]);
+								mesh_attribute->AddPolygon(control_points_offset + face.indices[2]);
 								mesh_attribute->EndPolygon();
 							}
+
+							control_points_offset += vertices_data.size();
 
 							/*for (int indices_i = 0; indices_i < weight_bone_indices.size(); indices_i++)
 							{
